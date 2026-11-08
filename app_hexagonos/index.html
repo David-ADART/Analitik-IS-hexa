@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hexágonos · epidemia animal</title>
+  <link rel="stylesheet" href="/css/estilos.css" />
+</head>
+<body>
+  <header class="banner">
+    <div class="kicker">ONEDEFENSE · TEATRO HEXAGONAL · MOTOR R</div>
+    <h1>Epidemia animal en hexágonos</h1>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="mapa">MAPA</button>
+    <button class="tab" data-tab="simulacion">SIMULACION</button>
+    <button class="tab" data-tab="resultados">RESULTADOS</button>
+    <button class="tab" data-tab="analisis">ANALISIS</button>
+  </nav>
+
+  <section id="panel-mapa" class="panel active">
+    <div class="panel-title">PARÁMETROS</div>
+    <div class="params" id="params"></div>
+    <div class="panel-title">MAPA INICIAL</div>
+    <div class="mapa-opciones">
+      <div class="field"><label>Semilla aleatoria</label><input id="semilla" type="number" value="1" /></div>
+      <div class="field"><label>Días a simular</label><input id="dias" type="number" min="1" max="1500" value="365" /></div>
+    </div>
+    <div class="btn-row">
+      <button id="btn-generar" type="button">GENERAR MAPA</button>
+      <button id="btn-cargar" type="button">CARGAR MAPA</button>
+      <button id="btn-guardar" type="button">GUARDAR PARÁMETROS</button>
+    </div>
+    <p id="aviso-mapa" class="status"></p>
+
+    <div class="panel-title">TABLA DE HEXÁGONOS</div>
+    <div class="btn-row"><button id="csv-hex" type="button">DESCARGAR CSV</button></div>
+    <div class="table-scroll"><table id="tabla-hex"></table></div>
+
+    <div class="panel-title">CONEXIONES ENTRE HEXÁGONOS</div>
+    <div class="btn-row">
+      <button id="csv-con" type="button">DESCARGAR CSV</button>
+      <button id="btn-conexion" type="button">AÑADIR CONEXIÓN</button>
+    </div>
+    <div class="table-scroll"><table id="tabla-con"></table></div>
+  </section>
+
+  <section id="panel-simulacion" class="panel">
+    <div class="sim-grid">
+      <div>
+        <canvas id="lienzo" width="900" height="640"></canvas>
+        <div class="leyenda"><span>0</span><div class="barra"></div><span>15</span><span id="max-formula"></span></div>
+        <label class="slider-lab">Día
+          <input id="slider-dia" type="range" min="0" max="0" value="0" />
+          <span id="slider-val">0</span>
+        </label>
+      </div>
+      <aside class="side">
+        <div class="panel-title">COLOR DEL MAPA</div>
+        <div class="field">
+          <label>Fórmula con S, E, I, R, C</label>
+          <input id="formula-mapa" type="text" value="E+I+C" />
+        </div>
+        <div class="field">
+          <label>Explicación</label>
+          <textarea id="nota-mapa">Densidad de expuestos, infectados y carcasas.</textarea>
+        </div>
+        <p id="texto-mapa" class="nota"></p>
+        <div class="btn-row"><button id="btn-formula" type="button">ACTUALIZAR MAPA</button></div>
+        <div class="field">
+          <label>Día representado</label>
+          <input id="dia-num" type="number" min="0" value="0" />
+        </div>
+        <div class="field">
+          <label>Actualizar el mapa cada (días)</label>
+          <input id="cada" type="number" min="1" value="1" />
+        </div>
+        <div class="btn-row">
+          <button id="btn-play" type="button">▶ PLAY</button>
+          <button id="btn-replay" type="button">↺ REPLAY</button>
+        </div>
+        <p id="estado-sim" class="status">Sin simulación. Carga el mapa y pulsa play.</p>
+      </aside>
+    </div>
+  </section>
+
+  <section id="panel-resultados" class="panel">
+    <div class="res-grid">
+      <div>
+        <div class="panel-title">DHD · ESTADO DIARIO DE CADA HEXÁGONO</div>
+        <div class="btn-row"><button id="csv-dhd" type="button">DESCARGAR CSV</button></div>
+        <div class="paginador" id="pag-dhd"></div>
+        <div class="table-scroll"><table id="tabla-dhd"></table></div>
+      </div>
+      <div>
+        <div class="panel-title">DC · CONTAGIOS ENTRE HEXÁGONOS</div>
+        <div class="btn-row"><button id="csv-dc" type="button">DESCARGAR CSV</button></div>
+        <div class="paginador" id="pag-dc"></div>
+        <div class="table-scroll"><table id="tabla-dc"></table></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="panel-analisis" class="panel">
+    <div class="mapa-opciones">
+      <div class="field">
+        <label>Fórmula con S, E, I, R, C</label>
+        <input id="formula-serie" type="text" value="E+I+C" />
+      </div>
+      <div class="field">
+        <label>Explicación</label>
+        <textarea id="nota-serie">Evolución de expuestos, infectados y carcasas.</textarea>
+      </div>
+      <div class="field"><label>Día inicial (DIAi)</label><input id="diai" type="number" min="0" value="0" /></div>
+      <div class="field"><label>Día final (DIAf)</label><input id="diaf" type="number" min="0" value="0" /></div>
+      <div class="field">
+        <label>Columnas (vacío = todas)</label>
+        <input id="filtro-c" type="text" placeholder="4, 7" />
+      </div>
+      <div class="field">
+        <label>Filas (vacío = todas)</label>
+        <input id="filtro-f" type="text" placeholder="1, 3" />
+      </div>
+    </div>
+    <div class="btn-row"><button id="btn-serie" type="button">ACTUALIZAR GRÁFICO</button></div>
+    <p id="texto-serie" class="nota"></p>
+    <canvas id="grafico" width="1100" height="460"></canvas>
+  </section>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>
