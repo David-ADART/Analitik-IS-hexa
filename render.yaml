@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: analitik-is-hexa
+    runtime: python
+    plan: free
+    region: frankfurt
+    branch: main
+    rootDir: app_hexagonos
+    buildCommand: pip install -r requirements.txt
+    startCommand: python servidor.py
+    healthCheckPath: /salud
+    autoDeployTrigger: commit
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.11"
+      - key: HEXA_CLAVE
+        sync: false
