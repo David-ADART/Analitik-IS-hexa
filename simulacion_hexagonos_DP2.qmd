@@ -1,0 +1,314 @@
+---
+title: "Simulacion Epidemia en Territorio"
+author: "Analitik-IS"
+format: html
+editor: visual
+---
+
+```{r cargar_librerias}
+
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+library(tidyverse)
+library(ggforce)
+
+```
+
+```{r definir_funciones}
+
+
+# Funcion de deteccion de infeccion en un hexágono y de activacion de CCG u PRC en vecinos
+deteccion_hexagono <- function(DH=dh, DV=dv){
+  
+  # DH = tabla de estado actual de cada hexágono
+  # DV = tabla de vecindad entre hexágonos
+  
+    DH <- mutate(DH, prob_detec = pmax(pmin(1, (pxi*I + pxc*C)), inf),
+               inf=rbinom(n(),1,prob_detec), # detectar inf en hexágno
+               ccr = inf*sign(pol_ccr), # declarar CCR en hexagono infectado
+               prc = inf*pol_prc)       # declarar PRC en hexagono infectado
+  
+  # Ahora hay que declarar CCR en hexágonos tantos círculos de hexágonos vecinos como pol_ccr-1
+  for(i in 1:pol_ccr){
+    DH$ccr[DH$idh %in% unique(DV$idhv[DV$idh %in% DH$idh[DH$ccr==1]])] <- 1
+  }  
+
+  return(DH)
+}
+
+
+
+# funcion para determinar nuevas densidades en todos los hexagonos
+actualizar_densidades <- function(DH=dh){
+  
+  ###  Flujos esperados entre compartimentos
+  # De susceptibles a expuestos
+  lambda <- con_vi * DH$I + con_ca * DH$C # coeficiente de resultar expuesto por contigüidad o ambiente
+  d_SE <- (1 - exp(-lambda)) * DH$S
+  # De Expuestos a infectados
+  d_EI <- (1 - exp(-ta_inc)) * DH$E
+  # De infectados a recuperados/muertos
+  d_IRC <- (1 - exp(-(ta_rec + ta_mor))) * DH$I #  numero de recuperados/muertos
+  d_IC <- (ta_mor / (ta_rec + ta_mor)) * d_IRC # muertes: pasan a carcasa
+  d_IR <- (ta_rec / (ta_rec + ta_mor)) * d_IRC # recuperados
+  # Descomposicion de carcasas
+  d_CD <- (1 - exp(-ta_des)) * DH$C
+  
+  ### Actualiza las densidades en la tabla de hexagonos
+  DH <- mutate(DH, dia=dia+1,
+               S = (S - d_SE)*(1-rdz*ccr), 
+               E = (E + d_SE - d_EI)*(1-rdz*ccr),
+               I = (I + d_EI - d_IRC)*(1-rdz*ccr),
+               R = (R + d_IR)*(1-rdz*ccr),
+               C = (C + d_IC - d_CD)*(1-rdc*prc))
+  
+  return(DH)
+}
+
+
+# Funcion para determinar contagio entre hexagonos
+contagio_hexagonos <- function(DV=dv, DH=dh){
+  
+  DC <- transmute(DH, dia, idh, fcont=kappa*(con_vi*I + con_ca*C)) |> 
+    filter(fcont>0) |> # quitar los que no pueden contagiar
+    left_join(DV, by="idh") |>   # poner vecinos
+    left_join(transmute(DH,idhv=idh, S), by="idhv") |> # añadir susceptibilidad en vecinos
+    mutate(prob = (1 - exp(-fcont*S)),  # Probabilidad de contagio
+           cont = rbinom(n(),1,prob)) |>  # hecho de contagio  
+    filter(cont==1)  # quedarse solo con los contagios
+  
+  # Modificar ahora la tabla de hexagonos
+  DH <- group_by(DC, idh=idhv) |>  summarise(cont=sum(cont)) |> ungroup() |> # contar contagios recibidos en cada hexágono
+    right_join(DH, by="idh") |> # pegar en tabla de hexágonos
+    mutate(cont = ifelse(is.na(cont),0,cont), 
+           E = E + cont*0.05*S,
+           S = S - cont*0.05*S,
+           cont=NULL)
+  
+  return(list(DC=transmute(DC,dia, idh, idhv, prob, cont), DH=DH))
+}
+
+
+
+# Funcion para dibujar hexágonos
+dibujar_hexagonos <- function(DIA, PAR="S", radio=1, DHD=dhd, ID=FALSE) {
+  # generar parametro para relleno
+  P <- filter(DHD, dia==DIA) |>  # seleccionar dia
+    mutate(PP = !!rlang::parse_expr(PAR),
+           Interv = factor(prc+2*ccr, levels=c(0:3), labels=c("Nada", "PRC", "CCR", "PRC+CCR"))) |>
+    ggplot(aes(x0=x, y0=y, r=radio, sides=6, angle=0, fill=PP, label=idh, col=Interv)) +
+    geom_regon(linewidth = 0.5) +
+    coord_fixed() +
+    scale_fill_gradient(
+      low = "white",
+      high = "#9b0000",
+      limits = c(0, 15),
+      oob = scales::squish,
+      name = PAR) +
+    labs(x="x", y="y", title=paste0("Densidad de  (",PAR,")  el día:  ",DIA), col="Interv") +
+    scale_color_manual(values=c("Nada"="lightgrey", "PRC"="green", "CCR"="red", "PRC+CCR"="blue")) + 
+    theme_minimal() +
+    guides(
+      col = guide_legend(
+        override.aes = list(
+          shape = 23,         # Cambia el cuadrado por una forma con borde/relleno
+          fill = "white",     # Relleno blanco en la leyenda
+          stroke = 1.5,       # Grosor del borde en la leyenda
+          size = 5            # Tamaño del símbolo en la leyenda
+        )
+      )
+    )
+  if(ID==TRUE) P <- P + geom_text(aes(x=x, y=y, size=0.5)) 
+  print(P)
+}
+
+
+
+# Funcion para dibujar evolucion de densidades
+dibujar_densidades <- function(DIAi=1, DIAf=NULL, PAR="E + I + C", DHD=dhd){
+  DIAf <- ifelse(is.null(DIAf), max(DHD$dia),DIAf)
+  filter(DHD, dia>=DIAi, dia<=DIAf) |>  # seleccionar dia
+    mutate(PP = !!rlang::parse_expr(PAR) ) |>
+    ggplot(aes(x=dia, y=PP, group=as.factor(idh), col=as.factor(c))) +
+  geom_line() + 
+  labs(title=paste0("Evolucion de densidad de  (",PAR,")"), col="Columna:", y="Densidad")
+}
+
+
+```
+
+## Introducción
+
+- Simulación de la expansión de una epidemia de enfermedad animal en un territorio.
+
+- El territorio se segmenta en hexágonos regulares y en cada hexágono se modela la evolución temporal de la epidemia, y entre hexágonos se simula contagio con cierta probabilidad.
+
+- Simulación de Control Cinegético Reactivo (CCR): Incluimos un algoritmo mediante el cual, cuando se detecta que hay infección en un hexágono, se establece un perímetro de control cinegético en los hexágonos circundantes para intentar contener la epidemia.
+
+## Parámetros del sistema
+
+### Parámetros de transmisión en medio rural
+
+Modelo: SEIRC: (Susceptible - Expuesto - Infectado - Recuperado - Carcasa)
+
+```{r definir_parametros}
+
+# Densidades poblacionales susceptibles iniciales
+den_mi <- 4    # Densidad mínima aletoria
+den_ma <- 10   # Densidad máxima aletoria
+den_co <- 0.5  # Densidad de contención
+
+
+# Parámetros biológicos (en tasa diaria)
+ta_inc <- 0.25          # Tasa de incubación (periodo medio = 4 días)
+ta_mor <- 0.16          # Mortality rate por PPA (duración de la enfermedad ~6 días)
+ta_rec <- 0.008         # Tasa de recuperación (supervivencia ~5%)
+ta_des <- 0.033         # Tasa de descomposición/eliminación de carcasas (persistencia ~30 días)
+
+# Tasas basales de transmisión para densidad inicial de 2 ind/km2
+con_vi  <- 0.15  # Contagio por contacto directo con jabalíes vivos
+con_ca  <- 0.10  # Contagio ambiental por carcasas en el terreno
+kappa   <- 0.05  # fracción de la fuerza de infección que cruza al hexágono vecino
+
+```
+
+### Parámetros de Control Cinegético Reactivo (CCR) y plan retirada de carcasas (PRC)
+
+```{r}
+
+# Probabilidades de deteccion diaria según densidades de infecciosos y carcasas
+pxi <- 0.05  # Probabilidad de detección con densidad infeccioso = 1
+pxc <- 0.1   # Probabilidad de detección con densidad carcasa = 1 
+
+# ¿Hay politica de CCR y de PRC?
+pol_ccr <- 3 # profundidad del anillo de control cinegético alrededor de un hexágono infectado
+pol_prc <- 1 # plan de eliminacion de carcasas de hexágono infectado
+
+# reduccion de densidades por cada dia de CCR
+rdz <- 0.05  # Asumimos que es igual para jabalís en todos los estados
+# Asumimos que no se incrementan las carcasas porque se retiran todas las de los animales cazados.
+rdc <- 0.05  # reduccion de carcasas si hay un programa especial de retirada 
+
+```
+
+### Parámetros del Mapa 
+
+```{r}
+
+ND <- 10 # Número de hexágonos en la diagonal
+R  <- 1 # radio del hexágono en km
+
+h00 <- c(2,3) # posicion [c,f] del hexagono inicial de infeccion
+
+CCONT <- c(9999)  # columnas de control con baja densidad
+
+```
+
+## Generar datos
+
+### Mapa de Hexágonos
+
+- Generar mapa de hexágono colocados top-planos con coordenadas sistema Uber H3 \[q,r\]
+
+- Definir un número ND y desarrollar un mapa con NDxND hexágonos. Donde estos se distribuyen a ambos lados de una diagonal principal direccion SO -\> NE con longitud ND.
+
+  - Hexagonos por encima de la diagonal toman valores r\>0 y a la derecha del \[0,0\] toman valores q\>0
+
+  - Esto es topologicamente equivalente a tener un cuadrado de lado ND, con coordenadas columna, fila \[c, f\]
+
+- Las formulas para convertir coordenadas una vez se decida el hexagno central \[c', f'\] que tendrá \[q=0, r=0\] son:
+
+  - q = c - c'
+
+  - r = (f - f') - (c - c') = (f - f') - q
+
+- Las coordenadas \[x,y\] en un mapa cartesiano serían:
+
+  - x = Radio \* (3/2) \* q
+
+  - y = Radio \* sqrt(3) \* (q/2 + r)
+
+```{r generar_hexagonos}
+
+# Tabla inicial de hexágonos
+dh0 <- tibble(idh = c(1:(ND^2)),
+              c = rep(1:ND, each=ND),
+              f = rep(1:ND, ND),
+              q = c - h00[1], 
+              r = (f - h00[2]) - q,
+              x = R*(3/2)*q,
+              y = R*sqrt(3)*(q/2 + r),
+              dia = 0,
+              S = runif((ND^2), den_mi, den_ma),
+              E = 0, I = 0, R = 0, C = 0,
+              inf = 0,         # Infeccion declarada en hexágono
+              ccr = 0,         # estado de control cinegético reactivo
+              prc = 0) |>      # estado de plan retirada carcasas
+  # Modificar densidades e iniciar epidemia
+  mutate(S = ifelse(c %in% CCONT, den_co, S),  # poner baja densidad en columnas de control
+         E = ifelse(q==0 & r==0, 0.1, E),  # comenzar epidemia en IDH = 4 con E = 0.1
+         S = S-E) 
+
+
+# Tabla de vecindad entre hexagonos:
+dv <- bind_rows(
+  transmute(dh0, idh, q, r, pos="NO", qv=q-1, rv=r+1),
+  transmute(dh0, idh, q, r, pos="N",  qv=q,   rv=r+1),
+  transmute(dh0, idh, q, r, pos="NE", qv=q+1, rv=r  ),
+  transmute(dh0, idh, q, r, pos="SE", qv=q+1, rv=r-1),
+  transmute(dh0, idh, q, r, pos="S",  qv=q,   rv=r-1),
+  transmute(dh0, idh, q, r, pos="SO", qv=q-1, rv=r  )
+) |> 
+  left_join(transmute(dh0, qv=q, rv=r, idhv=idh)) |> 
+  filter(!is.na(idhv)) |> 
+  transmute(idh, pos, idhv)
+
+
+```
+
+## Simular Epidemia
+
+```{r simulacion_diaria}
+
+dias_simulados <- 365
+
+dh <- dh0
+dhd <- NULL
+dc <- NULL
+
+for(d in 1:dias_simulados){
+  dhd <- bind_rows(dhd, dplyr::select(dh, idh, x, y, c, f, dia, S, E, I, R, C, inf, ccr, prc))
+  dh  <- actualizar_densidades() # evolucion de la epidemia intra-hexágono
+  CH  <- contagio_hexagonos()    # contagio entre hexágonos al final el día
+  dh  <- CH$DH                   # actualizar hexagonos tras contagios
+  dc  <- bind_rows(dc, CH$DC)    # añadir a tabla de contagios
+  dh  <- deteccion_hexagono()    # cambiar estado de deteccion en hexágonos
+}
+
+
+```
+
+## Visualizar Resultados
+
+### Evolución de Densidades
+
+```{r}
+dibujar_densidades()
+
+```
+
+### Mapas
+
+```{r graficar_dias}
+
+dibujar_hexagonos(1)
+dibujar_hexagonos(20, "E+I+C")
+dibujar_hexagonos(30, "E+I+C")
+dibujar_hexagonos(45, "E+I+C")
+dibujar_hexagonos(60, "E+I+C")
+dibujar_hexagonos(90, "E+I+C")
+dibujar_hexagonos(120, "E+I+C")
+dibujar_hexagonos(180, "E+I+C")
+dibujar_hexagonos(364, "E+I+C")
+```
+
+### 
